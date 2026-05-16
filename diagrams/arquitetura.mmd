@@ -1,0 +1,37 @@
+flowchart TD
+    subgraph host["Host / Docker Network"]
+        subgraph vol["serial_pair volume  (/tmp)"]
+            S1["/tmp/ttyS1"]
+            S2["/tmp/ttyS2"]
+        end
+
+        subgraph socat_svc["Container: socat"]
+            SOC["socat\n(PTY pair creator)"]
+        end
+
+        subgraph qrc_svc["Container: qr-c  (C)"]
+            QRC["qr_reader\n• opens SERIAL_PORT=/tmp/ttyS1\n• TCP server :9000"]
+        end
+
+        subgraph gw_svc["Container: gateway-py  (Python)"]
+            GW["app.py\n• QRClient → TCP :9000\n• paho-mqtt TLS client"]
+        end
+    end
+
+    subgraph cloud["Internet / Cloud"]
+        MQTT["test.mosquitto.org:8883\n(TLS / MQTT broker)"]
+    end
+
+    SOC -- "creates PTY pair" --> S1
+    SOC -- "creates PTY pair" --> S2
+
+    S1 -- "serial read/write\n(SERIAL_PORT)" --> QRC
+    S2 -. "other end of PTY\n(loopback / socat)" .-> SOC
+
+    QRC -- "TCP :9000\nINIT / PING / START / STOP\n→ OK / PONG / JSON / TIMEOUT" --> GW
+
+    GW -- "subscribe\nfrom_cloud/command" --> MQTT
+    GW -- "publish\nfrom_device/events" --> MQTT
+
+    MQTT -- "command payload\n{\"command\":\"START\"}" --> GW
+    GW -- "event payload\n{\"source\":\"qr\",\"response\":\"...\",\"ts\":...}" --> MQTT

@@ -1,0 +1,54 @@
+version: "3.9"
+
+volumes:
+  serial_pair:
+  logs:
+
+services:
+  socat:
+    image: alpine/socat
+    command: pty,raw,echo=0,link=/tmp/ttyS1 pty,raw,echo=0,link=/tmp/ttyS2
+    volumes:
+      - serial_pair:/tmp
+    restart: unless-stopped
+
+  qr-c:
+    build: ./qr-c
+    environment:
+      - SERIAL_PORT=/tmp/ttyS1
+      - TCP_PORT=9000
+      - SIMULATE=1
+    volumes:
+      - serial_pair:/tmp
+      - logs:/logs
+    ports:
+      - "9000:9000"
+    depends_on:
+      - socat
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w2 localhost 9000 | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  gateway-py:
+    build: ./gateway-py
+    environment:
+      - QR_HOST=qr-c
+      - QR_PORT=9000
+      - MQTT_BROKER=test.mosquitto.org
+      - MQTT_PORT=8883
+      - MQTT_CA_CERT=/certs/mosquitto.org.crt
+    volumes:
+      - logs:/logs
+    depends_on:
+      qr-c:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.create_connection(('qr-c',9000),2); s.close()\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
