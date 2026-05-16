@@ -27,7 +27,7 @@ services:
       - socat
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "echo PING | nc -w2 localhost 9000 | grep -q PONG"]
+      test: ["CMD", "/app/health_check"]
       interval: 10s
       timeout: 5s
       retries: 3
