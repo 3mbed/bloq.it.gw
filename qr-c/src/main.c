@@ -307,7 +307,8 @@ static void handle_command(int client_fd, const char *cmd)
         tcp_send(client_fd, "OK\n");
 
     } else {
-        char reply[1040];
+        /* LINE_BUF_SIZE (1024) + "UNKNOWN_CMD:\n" (13) + NUL = 1038 */
+        char reply[LINE_BUF_SIZE + 16];
         snprintf(reply, sizeof(reply), "UNKNOWN_CMD:%s\n", cmd);
         tcp_send(client_fd, reply);
     }
