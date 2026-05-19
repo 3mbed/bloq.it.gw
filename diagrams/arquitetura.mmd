@@ -1,0 +1,32 @@
+graph TD
+    subgraph cloud["Cloud"]
+        BROKER["MQTT Broker\ntest.mosquitto.org:8883 TLS"]
+    end
+
+    subgraph device["Smart Locker — Linux SBC (Docker host)"]
+        SOCAT["fake-serial\nalpine/socat\n/tmp/ttyS1 ↔ /tmp/ttyS2"]
+
+        subgraph ctnA["Container A — qr-c (C/C++)"]
+            SERIAL_RD["Serial reader\nSERIAL_PORT=/tmp/ttyS1\n115200 baud"]
+            SOCK_SRV["Unix socket server\n/tmp/qr.sock\nJSON commands + responses"]
+        end
+
+        subgraph ctnB["Container B — gateway-py (Python)"]
+            SOCK_CLI["Unix socket client\n→ /tmp/qr.sock"]
+            MQTT_CLI["paho-mqtt client\nTLS / port 8883"]
+        end
+    end
+
+    BROKER -- "subscribe: from_cloud/command" --> MQTT_CLI
+    MQTT_CLI -- "publish: from_device/events" --> BROKER
+
+    SOCAT -- "virtual UART /tmp/ttyS1" --> SERIAL_RD
+    SOCAT -- "virtual UART /tmp/ttyS2\n(mock QR data injected here)" --> SOCAT
+
+    SOCK_SRV -- "PONG / OK / {qr-data}" --> SOCK_CLI
+    SOCK_CLI -- "INIT / PING / START / STOP" --> SOCK_SRV
+
+    MQTT_CLI -- "route command" --> SOCK_CLI
+    SOCK_CLI -- "forward event" --> MQTT_CLI
+
+    SERIAL_RD -- "reads QR code\nor TIMEOUT" --> SOCK_SRV

@@ -1,0 +1,72 @@
+version: "3.9"
+
+volumes:
+  logs:
+
+services:
+
+  # ── Simulated serial port pair ──────────────────────────────────────────
+  fake-serial:
+    image: alpine/socat:latest
+    restart: unless-stopped
+    command: >
+      socat -d -d
+      pty,raw,echo=0,link=/tmp/ttyS1
+      pty,raw,echo=0,link=/tmp/ttyS2
+    volumes:
+      - /tmp:/tmp
+    healthcheck:
+      test: ["CMD", "test", "-e", "/tmp/ttyS1"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  # ── Container A: C/C++ QR serial driver ─────────────────────────────────
+  qr-c:
+    build:
+      context: ./qr-c
+      dockerfile: Dockerfile
+    image: bloqit/qr-c:latest
+    restart: unless-stopped
+    environment:
+      SERIAL_PORT: /tmp/ttyS1
+      BAUD_RATE: "115200"
+      SOCK_PATH: /tmp/qr.sock
+      READ_TIMEOUT: "10"
+    volumes:
+      - /tmp:/tmp
+      - logs:/var/log/bloqit
+    depends_on:
+      fake-serial:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "test", "-S", "/tmp/qr.sock"]
+      interval: 3s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ── Container B: Python MQTT gateway ────────────────────────────────────
+  gateway-py:
+    build:
+      context: ./gateway-py
+      dockerfile: Dockerfile
+    image: bloqit/gateway-py:latest
+    restart: unless-stopped
+    environment:
+      MQTT_HOST: test.mosquitto.org
+      MQTT_PORT: "8883"
+      MQTT_CERT: /certs/mosquitto.org.crt
+      MQTT_TOPIC_CMD: from_cloud/command
+      MQTT_TOPIC_EVENT: from_device/events
+      SOCK_PATH: /tmp/qr.sock
+      RECONNECT_DELAY: "5"
+    volumes:
+      - /tmp:/tmp
+      - logs:/var/log/bloqit
+      # optional: mount your own CA cert
+      # - ./certs/mosquitto.org.crt:/certs/mosquitto.org.crt:ro
+    depends_on:
+      qr-c:
+        condition: service_healthy
