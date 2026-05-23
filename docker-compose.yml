@@ -5,26 +5,9 @@ volumes:
 
 services:
 
-  # ── Simulated serial port pair ──────────────────────────────────────────
-  fake-serial:
-    image: alpine/socat:latest
-    restart: unless-stopped
-    # alpine/socat's ENTRYPOINT is already "socat" — pass only the args.
-    command:
-      - "-d"
-      - "-d"
-      - "pty,raw,echo=0,link=/tmp/ttyS1,mode=666"
-      - "pty,raw,echo=0,link=/tmp/ttyS2,mode=666"
-    volumes:
-      - /tmp:/tmp
-    healthcheck:
-      test: ["CMD", "test", "-e", "/tmp/ttyS1"]
-      interval: 2s
-      timeout: 3s
-      retries: 10
-      start_period: 3s
-
-  # ── Container A: C/C++ QR serial driver ─────────────────────────────────
+  # ── Container A: C/C++ QR serial driver + socat sidecar ─────────────────
+  # NB: socat runs INSIDE this container (not a separate service) so the
+  # PTY device nodes live in the same /dev/pts namespace as the C reader.
   qr-c:
     build:
       context: ./qr-c
@@ -39,9 +22,6 @@ services:
     volumes:
       - /tmp:/tmp
       - logs:/var/log/bloqit
-    depends_on:
-      fake-serial:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "test", "-S", "/tmp/qr.sock"]
       interval: 3s

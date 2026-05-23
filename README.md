@@ -10,12 +10,15 @@ Cloud (test.mosquitto.org:8883 TLS)
         │                   Container B — gateway-py (Python)
         │  from_device/events  ▲     │  Unix socket /tmp/qr.sock
         │                            ▼
-                             Container A — qr-c (C/C++)
-                                    │  /tmp/ttyS1 (UART)
-                                    ▼
-                             fake-serial (socat)
-                             /tmp/ttyS1 ↔ /tmp/ttyS2
+                             Container A — qr-c
+                              ├─ socat sidecar  /tmp/ttyS1 ↔ /tmp/ttyS2
+                              └─ C reader      reads /tmp/ttyS1
 ```
+
+socat runs as a sidecar **inside the qr-c container** (started by `start.sh`)
+so the PTY device nodes live in the same `/dev/pts` namespace as the C
+reader. Cross-container PTY sharing via a bind-mounted symlink does not
+work under default Docker isolation.
 
 See [`diagrams/arquitetura.mmd`](diagrams/arquitetura.mmd) for the full Mermaid diagram.
 
@@ -32,35 +35,21 @@ docker compose up --build --remove-orphans
 
 `--remove-orphans` clears any leftover container from an older compose definition (e.g. a previous `socat` service name).
 
-All three services start in order: `fake-serial` → `qr-c` → `gateway-py`, gated by health checks.
+Two services start in order: `qr-c` (with socat sidecar) → `gateway-py`, gated by a health check on `/tmp/qr.sock`.
 
 ## Troubleshooting
 
-### `socat[1] E exactly 2 addresses required (there are 5)`
+### `gateway-py` keeps logging `MQTT disconnected: reason_code=Unspecified error`
 
-The `alpine/socat` image already has `socat` as its ENTRYPOINT. The compose command must contain only the **arguments** (not the word `socat`). The compose file in this repo is correct; if you see this error, you may be running a stale compose definition — re-run with `--remove-orphans`.
-
-### `qr-c` can't read from `/tmp/ttyS1` despite `fake-serial` being healthy
-
-Linux ptys created by socat in the `fake-serial` container live in **that** container's `/dev/pts` namespace. The symlink `/tmp/ttyS1` (which is what's shared via the `/tmp` bind mount) points at `/dev/pts/N` — and following it from `qr-c`'s namespace may fail.
-
-If you hit this, the simplest fix is to **collapse `fake-serial` into the `qr-c` container** (run socat as a sidecar in the same namespace). Comment out the `fake-serial` service in compose and add to `qr-c/Dockerfile`:
-
-```dockerfile
-RUN apk add --no-cache socat
+This is paho's generic "connection lost" code. The gateway runs a TLS preflight on startup that logs the real cause:
 ```
-
-then prepend the startup with:
-
-```yaml
-qr-c:
-  command: sh -c "socat -d -d pty,raw,echo=0,link=/tmp/ttyS1,mode=666 pty,raw,echo=0,link=/tmp/ttyS2,mode=666 & sleep 1 && ./qr-c"
+TLS preflight OK — protocol=TLSv1.3 cipher=TLS_AES_256_GCM_SHA384
 ```
+If you see `TLS preflight FAILED — <ExceptionType>: <message>` instead, the message tells you whether it's DNS, cert verification, or a network reachability problem. The most common causes:
 
-Test injection then happens via `docker exec`:
-```bash
-docker exec <qr-c-container> sh -c 'echo ABC123 > /tmp/ttyS2'
-```
+- **Stale client ID**: another connection on the broker is using the same `MQTT_CLIENT_ID`. This repo uses a random UUID suffix by default, so it shouldn't happen unless you set `MQTT_CLIENT_ID` explicitly via env.
+- **Outbound TCP/8883 blocked**: corporate firewall or VPN. Try `docker compose exec gateway-py python -c "import socket; socket.create_connection(('test.mosquitto.org', 8883), 5)"`.
+- **Stale CA cert**: re-build with `docker compose build --no-cache gateway-py` to refresh `/certs/mosquitto.org.crt`.
 
 ## Test
 
@@ -93,8 +82,7 @@ mosquitto_pub -h test.mosquitto.org -p 8883 \
   -t from_cloud/command -m '{"command":"START"}'
 
 # Then inject a fake scan (within READ_TIMEOUT seconds)
-docker run --rm -v /tmp:/tmp alpine \
-  sh -c 'echo ABC123 > /tmp/ttyS2'
+docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
 ```
 
 Expected event on `from_device/events`:
