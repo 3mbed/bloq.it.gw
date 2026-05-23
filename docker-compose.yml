@@ -5,6 +5,26 @@ volumes:
 
 services:
 
+  # ── Local MQTT broker ───────────────────────────────────────────────────
+  # Replaces test.mosquitto.org so the gateway has a deterministic,
+  # rate-limit-free broker on the compose network. Plain MQTT on 1883;
+  # TLS is unnecessary inside the bridge network.
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # expose so you can mosquitto_pub/sub from the host
+    volumes:
+      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      # mosquitto_sub returns once it gets the SUBACK — proves the broker
+      # is accepting connections end-to-end.
+      test: ["CMD", "sh", "-c", "mosquitto_sub -h localhost -t healthcheck -C 1 -W 2 || true"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+
   # ── Container A: C/C++ QR serial driver + socat sidecar ─────────────────
   # NB: socat runs INSIDE this container (not a separate service) so the
   # PTY device nodes live in the same /dev/pts namespace as the C reader.
@@ -37,9 +57,9 @@ services:
     image: bloqit/gateway-py:latest
     restart: unless-stopped
     environment:
-      MQTT_HOST: test.mosquitto.org
-      MQTT_PORT: "8883"
-      MQTT_CERT: /certs/mosquitto.org.crt
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USE_TLS: "false"
       MQTT_TOPIC_CMD: from_cloud/command
       MQTT_TOPIC_EVENT: from_device/events
       SOCK_PATH: /tmp/qr.sock
@@ -47,8 +67,8 @@ services:
     volumes:
       - /tmp:/tmp
       - logs:/var/log/bloqit
-      # optional: mount your own CA cert
-      # - ./certs/mosquitto.org.crt:/certs/mosquitto.org.crt:ro
     depends_on:
       qr-c:
+        condition: service_healthy
+      mosquitto:
         condition: service_healthy

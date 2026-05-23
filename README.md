@@ -5,7 +5,7 @@ Smart parcel locker gateway: simulates QR-scanner hardware (C/C++) and bridges i
 ## Architecture
 
 ```
-Cloud (test.mosquitto.org:8883 TLS)
+                  mosquitto  (local, port 1883)
         │  from_cloud/command  ▼
         │                   Container B — gateway-py (Python)
         │  from_device/events  ▲     │  Unix socket /tmp/qr.sock
@@ -15,17 +15,15 @@ Cloud (test.mosquitto.org:8883 TLS)
                               └─ C reader      reads /tmp/ttyS1
 ```
 
-socat runs as a sidecar **inside the qr-c container** (started by `start.sh`)
-so the PTY device nodes live in the same `/dev/pts` namespace as the C
-reader. Cross-container PTY sharing via a bind-mounted symlink does not
-work under default Docker isolation.
+The compose stack ships its own `eclipse-mosquitto` broker so the gateway has a deterministic, rate-limit-free MQTT endpoint. Plain MQTT on `1883` is used inside the docker network; the broker port is also published to `localhost:1883` so you can `mosquitto_pub`/`mosquitto_sub` from the host. The gateway can still be pointed at `test.mosquitto.org:8883` by setting `MQTT_HOST=test.mosquitto.org MQTT_PORT=8883 MQTT_USE_TLS=true` — the cert is downloaded at build time.
+
+socat runs as a sidecar **inside the qr-c container** (started by `start.sh`) so the PTY device nodes live in the same `/dev/pts` namespace as the C reader. Cross-container PTY sharing via a bind-mounted symlink does not work under default Docker isolation.
 
 See [`diagrams/arquitetura.mmd`](diagrams/arquitetura.mmd) for the full Mermaid diagram.
 
 ## Prerequisites
 
 - Docker ≥ 24 and Docker Compose v2
-- Internet access to `test.mosquitto.org:8883`
 
 ## Run
 
@@ -35,7 +33,7 @@ docker compose up --build --remove-orphans
 
 `--remove-orphans` clears any leftover container from an older compose definition (e.g. a previous `socat` service name).
 
-Two services start in order: `qr-c` (with socat sidecar) → `gateway-py`, gated by a health check on `/tmp/qr.sock`.
+Three services start in order: `mosquitto` → `qr-c` (with socat sidecar) → `gateway-py`, gated by health checks.
 
 ## Troubleshooting
 
@@ -48,28 +46,26 @@ TLS preflight OK — protocol=TLSv1.3 cipher=TLS_AES_256_GCM_SHA384
 If you see `TLS preflight FAILED — <ExceptionType>: <message>` instead, the message tells you whether it's DNS, cert verification, or a network reachability problem. The most common causes:
 
 - **Stale client ID**: another connection on the broker is using the same `MQTT_CLIENT_ID`. This repo uses a random UUID suffix by default, so it shouldn't happen unless you set `MQTT_CLIENT_ID` explicitly via env.
-- **Outbound TCP/8883 blocked**: corporate firewall or VPN. Try `docker compose exec gateway-py python -c "import socket; socket.create_connection(('test.mosquitto.org', 8883), 5)"`.
+- **Outbound TCP/8883 blocked** (only relevant when `MQTT_USE_TLS=true` against `test.mosquitto.org`): corporate firewall or VPN. Try `docker compose exec gateway-py python -c "import socket; socket.create_connection(('test.mosquitto.org', 8883), 5)"`.
 - **Stale CA cert**: re-build with `docker compose build --no-cache gateway-py` to refresh `/certs/mosquitto.org.crt`.
 
 ## Test
 
 ### 1 — Send a command from the cloud side
 
-Publish to `from_cloud/command` with any MQTT client (e.g. mosquitto_pub):
+The compose stack runs a local `mosquitto` broker on `localhost:1883`. Publish to `from_cloud/command` with any MQTT client (e.g. mosquitto_pub):
 
 ```bash
 # Install mosquitto clients if needed: brew install mosquitto / apt install mosquitto-clients
 
-# PING
-mosquitto_pub -h test.mosquitto.org -p 8883 \
-  --cafile /path/to/mosquitto.org.crt \
-  -t from_cloud/command -m '{"command":"PING"}'
+# Watch responses in one terminal
+mosquitto_sub -h localhost -p 1883 -t from_device/events -v
 
-# Watch the response
-mosquitto_sub -h test.mosquitto.org -p 8883 \
-  --cafile /path/to/mosquitto.org.crt \
-  -t from_device/events -v
+# In another terminal, send a PING
+mosquitto_pub -h localhost -p 1883 -t from_cloud/command -m '{"command":"PING"}'
 ```
+
+You should see the gateway's `gateway_online` event followed by the PING response on the events topic.
 
 ### 2 — Inject a mock QR code (simulate the scanner hardware)
 
@@ -77,9 +73,7 @@ mosquitto_sub -h test.mosquitto.org -p 8883 \
 
 ```bash
 # First, trigger a START (so qr-c is waiting on the serial port)
-mosquitto_pub -h test.mosquitto.org -p 8883 \
-  --cafile /path/to/mosquitto.org.crt \
-  -t from_cloud/command -m '{"command":"START"}'
+mosquitto_pub -h localhost -p 1883 -t from_cloud/command -m '{"command":"START"}'
 
 # Then inject a fake scan (within READ_TIMEOUT seconds)
 docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
@@ -119,15 +113,16 @@ docker compose logs -f
 
 ### gateway-py (Container B)
 
-| Variable            | Default                    | Description                             |
-|---------------------|----------------------------|-----------------------------------------|
-| `MQTT_HOST`         | `test.mosquitto.org`       | MQTT broker hostname                    |
-| `MQTT_PORT`         | `8883`                     | MQTT broker TLS port                    |
-| `MQTT_CERT`         | `/certs/mosquitto.org.crt` | CA certificate for TLS verification     |
-| `MQTT_TOPIC_CMD`    | `from_cloud/command`       | Topic subscribed for commands           |
-| `MQTT_TOPIC_EVENT`  | `from_device/events`       | Topic published for events              |
-| `SOCK_PATH`         | `/tmp/qr.sock`             | Unix socket path to Container A         |
-| `RECONNECT_DELAY`   | `5`                        | Seconds between MQTT reconnect attempts |
+| Variable            | Default                    | Description                                          |
+|---------------------|----------------------------|------------------------------------------------------|
+| `MQTT_HOST`         | `mosquitto`                | MQTT broker hostname (service name on compose net)   |
+| `MQTT_PORT`         | `1883`                     | MQTT broker port (1883 plain, 8883 TLS)              |
+| `MQTT_USE_TLS`      | `false`                    | Set to `true` for the `test.mosquitto.org` TLS path  |
+| `MQTT_CERT`         | `/certs/mosquitto.org.crt` | CA certificate used when `MQTT_USE_TLS=true`         |
+| `MQTT_TOPIC_CMD`    | `from_cloud/command`       | Topic subscribed for commands                        |
+| `MQTT_TOPIC_EVENT`  | `from_device/events`       | Topic published for events                           |
+| `SOCK_PATH`         | `/tmp/qr.sock`             | Unix socket path to Container A                      |
+| `RECONNECT_DELAY`   | `5`                        | Seconds between MQTT reconnect attempts              |
 
 ## Design decisions
 
@@ -140,8 +135,8 @@ Each IPC client connection is handled in a detached `pthread`.  A `volatile stop
 **Serial reopening**  
 `ensure_serial()` is called inside every `handle_start()` loop iteration under the mutex, so transient disconnects (USB unplug/replug) recover automatically without restarting the container.
 
-**TLS without client certificates**  
-`test.mosquitto.org:8883` uses server-only TLS.  We download the public CA cert at image build time; if unavailable, we fall back to the system CA bundle.  No client key/cert is needed.
+**Local broker (default) instead of `test.mosquitto.org`**  
+The compose stack ships an `eclipse-mosquitto:2` broker. The public broker is rate-limited and was observed to close inbound CONNECTs from this environment before sending CONNACK, producing opaque `Unspecified error` disconnects in paho. A local broker eliminates that whole class of issues and makes the test loop deterministic. Set `MQTT_USE_TLS=true` together with `MQTT_HOST=test.mosquitto.org MQTT_PORT=8883` to switch back — the gateway loads `/certs/mosquitto.org.crt` (mosquitto's private CA, downloaded at build time) on top of system CAs.
 
 **`paho-mqtt` v2 API**  
 `CallbackAPIVersion.VERSION2` is used to avoid the deprecation warning and for future-proofness.

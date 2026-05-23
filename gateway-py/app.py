@@ -17,8 +17,9 @@ import uuid
 import paho.mqtt.client as mqtt
 
 # ---------- config ----------------------------------------------------------
-MQTT_HOST        = os.getenv("MQTT_HOST",        "test.mosquitto.org")
-MQTT_PORT        = int(os.getenv("MQTT_PORT",    "8883"))
+MQTT_HOST        = os.getenv("MQTT_HOST",        "mosquitto")
+MQTT_PORT        = int(os.getenv("MQTT_PORT",    "1883"))
+MQTT_USE_TLS     = os.getenv("MQTT_USE_TLS",     "false").lower() in ("1", "true", "yes")
 MQTT_CERT        = os.getenv("MQTT_CERT",        "/certs/mosquitto.org.crt")
 MQTT_TOPIC_CMD   = os.getenv("MQTT_TOPIC_CMD",   "from_cloud/command")
 MQTT_TOPIC_EVENT = os.getenv("MQTT_TOPIC_EVENT", "from_device/events")
@@ -149,11 +150,24 @@ def _preflight_tls() -> None:
         log.error("TLS preflight FAILED — %s: %s", type(exc).__name__, exc)
 
 
+def _preflight_tcp() -> None:
+    """Plain-TCP reachability check for non-TLS brokers."""
+    try:
+        with socket.create_connection((MQTT_HOST, MQTT_PORT), timeout=5):
+            log.info("TCP preflight OK — %s:%d reachable", MQTT_HOST, MQTT_PORT)
+    except Exception as exc:  # noqa: BLE001
+        log.error("TCP preflight FAILED — %s: %s", type(exc).__name__, exc)
+
+
 # ---------- main ------------------------------------------------------------
 def main() -> None:
-    log.info("gateway starting — MQTT=%s:%d client_id=%s",
-             MQTT_HOST, MQTT_PORT, MQTT_CLIENT_ID)
-    _preflight_tls()
+    log.info("gateway starting — MQTT=%s:%d TLS=%s client_id=%s",
+             MQTT_HOST, MQTT_PORT, MQTT_USE_TLS, MQTT_CLIENT_ID)
+
+    if MQTT_USE_TLS:
+        _preflight_tls()
+    else:
+        _preflight_tcp()
 
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
@@ -165,10 +179,10 @@ def main() -> None:
     client.on_disconnect = on_disconnect
     client.on_message    = on_message
 
-    # test.mosquitto.org uses its OWN private CA (not Let's Encrypt), so we
-    # must load /certs/mosquitto.org.crt on top of system CAs — otherwise
-    # verification fails with "unable to get local issuer certificate".
-    client.tls_set_context(_make_tls_context())
+    if MQTT_USE_TLS:
+        # When pointed at test.mosquitto.org (private CA) we must load
+        # /certs/mosquitto.org.crt on top of system CAs.
+        client.tls_set_context(_make_tls_context())
     client.reconnect_delay_set(min_delay=1, max_delay=30)
 
     # Surface paho's internal protocol log lines (handshake, packet send/recv,
