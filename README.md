@@ -143,6 +143,8 @@ The compose stack ships an `eclipse-mosquitto:2` broker. The public broker is ra
 
 ## Future improvements
 
+- Add a TLS listener to the local `mosquitto` broker (self-signed CA, mounted into both broker and gateway) so the dev setup matches the spec's encrypted-transport requirement without depending on the public broker
+- Add an authenticated user/password (or per-device client cert) to the local broker so the gateway is exercised against a non-anonymous config
 - Add a proper message queue between IPC and MQTT so commands during a reconnect are not dropped
 - Support MQTT v5 properties (message expiry, correlation data)
 - Replace the simulated serial with a real `/dev/ttyUSBx` device by overriding `SERIAL_PORT`

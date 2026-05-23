@@ -1,27 +1,34 @@
 graph TD
-    subgraph cloud["Cloud"]
-        BROKER["MQTT Broker\ntest.mosquitto.org:8883 TLS"]
+    subgraph cloud["Cloud (optional — set MQTT_USE_TLS=true)"]
+        REMOTE["test.mosquitto.org:8883\nTLS, private CA"]
     end
 
     subgraph device["Smart Locker — Linux SBC (Docker host)"]
-        SOCAT["fake-serial\nalpine/socat\n/tmp/ttyS1 ↔ /tmp/ttyS2"]
+
+        subgraph broker_box["Local broker (default)"]
+            BROKER["mosquitto\neclipse-mosquitto:2\ncompose net: mosquitto:1883\nhost: localhost:11883"]
+        end
 
         subgraph ctnA["Container A — qr-c (C/C++)"]
+            SIDECAR["socat sidecar\n/tmp/ttyS1 ↔ /tmp/ttyS2\nmode=666"]
             SERIAL_RD["Serial reader\nSERIAL_PORT=/tmp/ttyS1\n115200 baud"]
-            SOCK_SRV["Unix socket server\n/tmp/qr.sock\nJSON commands + responses"]
+            SOCK_SRV["Unix socket server\n/tmp/qr.sock"]
         end
 
         subgraph ctnB["Container B — gateway-py (Python)"]
             SOCK_CLI["Unix socket client\n→ /tmp/qr.sock"]
-            MQTT_CLI["paho-mqtt client\nTLS / port 8883"]
+            MQTT_CLI["paho-mqtt client\nplain MQTT v3.1.1\n(TLS only if MQTT_USE_TLS=true)"]
         end
     end
 
-    BROKER -- "subscribe: from_cloud/command" --> MQTT_CLI
-    MQTT_CLI -- "publish: from_device/events" --> BROKER
+    BROKER -- "from_cloud/command" --> MQTT_CLI
+    MQTT_CLI -- "from_device/events" --> BROKER
 
-    SOCAT -- "virtual UART /tmp/ttyS1" --> SERIAL_RD
-    SOCAT -- "virtual UART /tmp/ttyS2\n(mock QR data injected here)" --> SOCAT
+    REMOTE -. "from_cloud/command" .-> MQTT_CLI
+    MQTT_CLI -. "from_device/events" .-> REMOTE
+
+    SIDECAR -- "virtual UART /tmp/ttyS1" --> SERIAL_RD
+    SIDECAR -- "mock QR write\n/tmp/ttyS2" --> SIDECAR
 
     SOCK_SRV -- "PONG / OK / {qr-data}" --> SOCK_CLI
     SOCK_CLI -- "INIT / PING / START / STOP" --> SOCK_SRV
@@ -29,4 +36,4 @@ graph TD
     MQTT_CLI -- "route command" --> SOCK_CLI
     SOCK_CLI -- "forward event" --> MQTT_CLI
 
-    SERIAL_RD -- "reads QR code\nor TIMEOUT" --> SOCK_SRV
+    SERIAL_RD -- "QR code or TIMEOUT" --> SOCK_SRV

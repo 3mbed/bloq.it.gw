@@ -5,9 +5,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download mosquitto.org public CA cert (TLS peer verification).
-# If the download fails (no internet at build time), drop a placeholder
-# and fall back to the system CA bundle at runtime (handled in app.py).
+# mosquitto.org public CA cert — only consulted when MQTT_USE_TLS=true and
+# the gateway is pointed at test.mosquitto.org. We keep it baked in so the
+# TLS path is one env flip away; if the download fails (no internet at
+# build time), drop a placeholder and rely on system CAs at runtime.
 RUN apt-get update -qq \
     && apt-get install -y --no-install-recommends wget ca-certificates \
     && mkdir -p /certs \
@@ -18,8 +19,11 @@ RUN apt-get update -qq \
 
 COPY app.py .
 
-ENV MQTT_HOST=test.mosquitto.org
-ENV MQTT_PORT=8883
+# Defaults target the local broker shipped by docker-compose.yml.
+# Override these to point at test.mosquitto.org:8883 with MQTT_USE_TLS=true.
+ENV MQTT_HOST=mosquitto
+ENV MQTT_PORT=1883
+ENV MQTT_USE_TLS=false
 ENV MQTT_CERT=/certs/mosquitto.org.crt
 ENV MQTT_TOPIC_CMD=from_cloud/command
 ENV MQTT_TOPIC_EVENT=from_device/events

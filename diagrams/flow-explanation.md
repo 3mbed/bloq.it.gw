@@ -12,20 +12,33 @@ Three services start in strict order, gated by health checks:
 ```
 docker compose up
 │
-├─1─▶ fake-serial (alpine/socat)
-│       socat pty,link=/tmp/ttyS1 ↔ pty,link=/tmp/ttyS2
-│       health: test -e /tmp/ttyS1
+├─1─▶ mosquitto (eclipse-mosquitto:2)
+│       listener 1883, anonymous, logs to stdout
+│       host port: localhost:11883 → container 1883
+│       health: mosquitto_sub -h localhost -t healthcheck -C 1 -W 2
 │
-├─2─▶ qr-c  (Container A — C)          [waits for fake-serial healthy]
-│       open_serial("/tmp/ttyS1")
-│       listen("/tmp/qr.sock")
+├─2─▶ qr-c  (Container A — C, socat as sidecar)
+│       start.sh launches socat in background:
+│         pty,link=/tmp/ttyS1 ↔ pty,link=/tmp/ttyS2  (mode=666)
+│       then execs ./qr-c which:
+│         open_serial("/tmp/ttyS1")
+│         listen("/tmp/qr.sock")
 │       health: test -S /tmp/qr.sock
 │
-└─3─▶ gateway-py  (Container B — Python) [waits for qr-c healthy]
-        client.connect("test.mosquitto.org", 8883, TLS)
+└─3─▶ gateway-py  (Container B — Python) [waits for mosquitto AND qr-c healthy]
+        client.connect("mosquitto", 1883, plain MQTT v3.1.1)
         on_connect → subscribe("from_cloud/command")
         on_connect → publish("from_device/events", {"event":"gateway_online"})
 ```
+
+> **Why a local broker?** `test.mosquitto.org` is rate-limited and was
+> observed to drop our CONNECT before sending CONNACK from this
+> environment, producing opaque `Unspecified error` disconnects in paho.
+> The local broker is deterministic and free. Set
+> `MQTT_USE_TLS=true MQTT_HOST=test.mosquitto.org MQTT_PORT=8883` on
+> `gateway-py` to flip back to the cloud broker — the gateway loads
+> `mosquitto.org.crt` (their private CA, downloaded at build time)
+> on top of system CAs.
 
 ---
 
@@ -116,11 +129,11 @@ volume mounted by both containers.
 
 ---
 
-## Step 7 — MQTT TLS event published to cloud (`gateway-py/app.py`)
+## Step 7 — MQTT event published to the broker (`gateway-py/app.py`)
 
 ```
-  Container B                    test.mosquitto.org:8883
-  ──────────                     ──────────────────────
+  Container B                       mosquitto (compose net)
+  ──────────                        ──────────────────────
   _publish_event()
        │
        │  client.publish(
@@ -129,16 +142,25 @@ volume mounted by both containers.
        │    qos=1
        │  )
        │
-       └────── TLS encrypted ──────────────────────────▶ [ MQTT Broker ]
-                port 8883                                       │
-                CA cert: mosquitto.org.crt                      │
-                                                         cloud subscriber
-                                                         receives event
+       └────── plain MQTT v3.1.1 ──────────────────────▶ [ mosquitto:1883 ]
+                                                                  │
+                                                          forwards to any
+                                                          subscriber on
+                                                          from_device/events
+                                                          (e.g. host CLI on
+                                                          localhost:11883)
 ```
 
-On disconnect, `on_disconnect` fires → outer `while True` in `main()` waits
-`RECONNECT_DELAY` seconds and reconnects. Any error is also published to
-`from_device/events` so the cloud always knows device state.
+By default the gateway talks **plain MQTT** to the local broker — no TLS
+in the docker network, no rate limiting, deterministic. If you set
+`MQTT_USE_TLS=true MQTT_HOST=test.mosquitto.org MQTT_PORT=8883` the same
+publish goes out over TLS to the public broker instead; the gateway loads
+the mosquitto.org private CA on top of system CAs.
+
+On disconnect, `on_disconnect` fires → outer `while True` in `main()`
+waits `RECONNECT_DELAY` seconds and reconnects. Any IPC error is also
+published to `from_device/events` so the subscriber always knows device
+state.
 
 ---
 
