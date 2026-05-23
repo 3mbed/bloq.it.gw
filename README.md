@@ -90,7 +90,127 @@ Expected event on `from_device/events`:
 {"qr-data": {"code": "ABC123", "ts": 1730780000}}
 ```
 
-### 3 — Test the Unix socket directly (no MQTT needed)
+### 3 — Full parcel delivery cycle
+
+End-to-end simulation of a courier drop-off followed by a customer pick-up.
+Open **two terminals** before starting.
+
+**Terminal A — watch all events (keep open throughout):**
+```bash
+mosquitto_sub -h localhost -p 11883 -t from_device/events -v
+```
+
+---
+
+#### Phase 0 — Health check
+
+Verify the gateway is live before touching the locker:
+
+```bash
+# Terminal B
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"PING"}'
+```
+
+Expected on Terminal A:
+```json
+{"response": "PONG", "command": "PING", "ts": 1730780000}
+```
+
+---
+
+#### Phase 1 — Courier drop-off
+
+The cloud has pre-generated a one-time QR token for the courier (`COURIER-001`).
+It now arms the scanner and waits for the courier to present their phone.
+
+```bash
+# Terminal B — arm the scanner, then immediately inject the courier's QR
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}' \
+  && docker exec $(docker compose ps -q qr-c) sh -c 'echo COURIER-001 > /tmp/ttyS2'
+```
+
+Expected on Terminal A:
+```json
+{"qr-data": {"code": "COURIER-001", "ts": 1730780000}}
+```
+
+The cloud platform receives the code, validates it against the pre-issued token,
+and would now unlock the door (MCU/relay — outside this simulation). After the
+courier loads the parcel and closes the door the cloud sends STOP to confirm the
+session is closed:
+
+```bash
+# Terminal B — cloud closes the courier session
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"STOP"}'
+```
+
+Expected on Terminal A:
+```json
+{"response": "STOP", "command": "STOP", "ts": 1730780000}
+```
+
+---
+
+#### Phase 2 — Customer pick-up
+
+The cloud arms the scanner again for the customer's separate QR token (`CUSTOMER-001`):
+
+```bash
+# Terminal B — arm the scanner, then immediately inject the customer's QR
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}' \
+  && docker exec $(docker compose ps -q qr-c) sh -c 'echo CUSTOMER-001 > /tmp/ttyS2'
+```
+
+Expected on Terminal A:
+```json
+{"qr-data": {"code": "CUSTOMER-001", "ts": 1730780000}}
+```
+
+The cloud validates the token, unlocks the door, and the customer retrieves their parcel.
+
+```bash
+# Terminal B — cloud closes the customer session
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"STOP"}'
+```
+
+---
+
+#### Phase 3 — Abort a scan mid-wait (optional)
+
+Send START then cancel before any QR arrives — simulates the cloud aborting an
+open session (e.g. token expired):
+
+```bash
+# Terminal B — arm, then cancel 3 seconds later
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}' \
+  && sleep 3 \
+  && mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"STOP"}'
+```
+
+Expected on Terminal A — STOP acknowledgement (no qr-data published):
+```json
+{"response": "STOP", "command": "STOP", "ts": 1730780000}
+```
+
+---
+
+#### Phase 4 — Re-initialise the serial reader (optional)
+
+If the serial reader gets into a bad state, INIT resets it without restarting the container:
+
+```bash
+# Terminal B
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"INIT"}'
+```
+
+Expected on Terminal A:
+```json
+{"response": "OK", "command": "INIT", "ts": 1730780000}
+```
+
+---
+
+### 4 — Test the Unix socket directly (no MQTT needed)
 
 ```bash
 docker exec -it <qr-c-container> sh
@@ -100,7 +220,7 @@ echo "INIT" | nc -U /tmp/qr.sock
 # → OK
 ```
 
-### 4 — View logs
+### 5 — View logs
 
 ```bash
 docker compose logs -f
