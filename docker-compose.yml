@@ -13,7 +13,10 @@ services:
     image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
-      - "1883:1883"   # expose so you can mosquitto_pub/sub from the host
+      # Host:container — host side uses 11883 to avoid clashing with a
+      # system-installed mosquitto or leftover container on 1883.
+      # The gateway talks to the broker on 1883 inside the compose network.
+      - "11883:1883"
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     healthcheck:

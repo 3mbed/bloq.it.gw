@@ -15,7 +15,7 @@ Smart parcel locker gateway: simulates QR-scanner hardware (C/C++) and bridges i
                               └─ C reader      reads /tmp/ttyS1
 ```
 
-The compose stack ships its own `eclipse-mosquitto` broker so the gateway has a deterministic, rate-limit-free MQTT endpoint. Plain MQTT on `1883` is used inside the docker network; the broker port is also published to `localhost:1883` so you can `mosquitto_pub`/`mosquitto_sub` from the host. The gateway can still be pointed at `test.mosquitto.org:8883` by setting `MQTT_HOST=test.mosquitto.org MQTT_PORT=8883 MQTT_USE_TLS=true` — the cert is downloaded at build time.
+The compose stack ships its own `eclipse-mosquitto` broker so the gateway has a deterministic, rate-limit-free MQTT endpoint. Plain MQTT on `1883` is used inside the docker network; the broker port is published to `localhost:11883` (remapped from the container's `1883` to avoid colliding with a system-installed mosquitto on the host) so you can `mosquitto_pub`/`mosquitto_sub` from the host. The gateway can still be pointed at `test.mosquitto.org:8883` by setting `MQTT_HOST=test.mosquitto.org MQTT_PORT=8883 MQTT_USE_TLS=true` — the cert is downloaded at build time.
 
 socat runs as a sidecar **inside the qr-c container** (started by `start.sh`) so the PTY device nodes live in the same `/dev/pts` namespace as the C reader. Cross-container PTY sharing via a bind-mounted symlink does not work under default Docker isolation.
 
@@ -59,10 +59,10 @@ The compose stack runs a local `mosquitto` broker on `localhost:1883`. Publish t
 # Install mosquitto clients if needed: brew install mosquitto / apt install mosquitto-clients
 
 # Watch responses in one terminal
-mosquitto_sub -h localhost -p 1883 -t from_device/events -v
+mosquitto_sub -h localhost -p 11883 -t from_device/events -v
 
 # In another terminal, send a PING
-mosquitto_pub -h localhost -p 1883 -t from_cloud/command -m '{"command":"PING"}'
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"PING"}'
 ```
 
 You should see the gateway's `gateway_online` event followed by the PING response on the events topic.
@@ -73,7 +73,7 @@ You should see the gateway's `gateway_online` event followed by the PING respons
 
 ```bash
 # First, trigger a START (so qr-c is waiting on the serial port)
-mosquitto_pub -h localhost -p 1883 -t from_cloud/command -m '{"command":"START"}'
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}'
 
 # Then inject a fake scan (within READ_TIMEOUT seconds)
 docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
