@@ -158,18 +158,30 @@ def main() -> None:
     client = mqtt.Client(
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=MQTT_CLIENT_ID,
+        protocol=mqtt.MQTTv311,
         clean_session=True,
     )
     client.on_connect    = on_connect
     client.on_disconnect = on_disconnect
     client.on_message    = on_message
 
-    client.tls_set_context(_make_tls_context())
+    # Use paho's simple tls_set() with system CAs instead of a custom context —
+    # this matches what most working paho examples use, and avoids any
+    # SSLContext flag that paho's socket-wrap layer might disagree with.
+    client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
+    client.tls_insecure_set(False)
     client.reconnect_delay_set(min_delay=1, max_delay=30)
+
+    # Surface paho's internal protocol log lines (handshake, packet send/recv,
+    # connection errors) so "Unspecified error" stops being a black box.
+    paho_log = logging.getLogger("paho-mqtt")
+    paho_log.setLevel(logging.DEBUG)
+    client.enable_logger(paho_log)
 
     while True:
         try:
-            client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+            rc = client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+            log.info("client.connect() returned rc=%s", rc)
             client.loop_forever(retry_first_connection=True)
         except Exception as exc:  # noqa: BLE001
             log.error("MQTT loop error: %s: %s — retrying in %ds",
