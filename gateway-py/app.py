@@ -165,11 +165,10 @@ def main() -> None:
     client.on_disconnect = on_disconnect
     client.on_message    = on_message
 
-    # Use paho's simple tls_set() with system CAs instead of a custom context —
-    # this matches what most working paho examples use, and avoids any
-    # SSLContext flag that paho's socket-wrap layer might disagree with.
-    client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS_CLIENT)
-    client.tls_insecure_set(False)
+    # test.mosquitto.org uses its OWN private CA (not Let's Encrypt), so we
+    # must load /certs/mosquitto.org.crt on top of system CAs — otherwise
+    # verification fails with "unable to get local issuer certificate".
+    client.tls_set_context(_make_tls_context())
     client.reconnect_delay_set(min_delay=1, max_delay=30)
 
     # Surface paho's internal protocol log lines (handshake, packet send/recv,
