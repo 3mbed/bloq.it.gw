@@ -27,10 +27,40 @@ See [`diagrams/arquitetura.mmd`](diagrams/arquitetura.mmd) for the full Mermaid 
 ## Run
 
 ```bash
-docker compose up --build
+docker compose up --build --remove-orphans
 ```
 
+`--remove-orphans` clears any leftover container from an older compose definition (e.g. a previous `socat` service name).
+
 All three services start in order: `fake-serial` → `qr-c` → `gateway-py`, gated by health checks.
+
+## Troubleshooting
+
+### `socat[1] E exactly 2 addresses required (there are 5)`
+
+The `alpine/socat` image already has `socat` as its ENTRYPOINT. The compose command must contain only the **arguments** (not the word `socat`). The compose file in this repo is correct; if you see this error, you may be running a stale compose definition — re-run with `--remove-orphans`.
+
+### `qr-c` can't read from `/tmp/ttyS1` despite `fake-serial` being healthy
+
+Linux ptys created by socat in the `fake-serial` container live in **that** container's `/dev/pts` namespace. The symlink `/tmp/ttyS1` (which is what's shared via the `/tmp` bind mount) points at `/dev/pts/N` — and following it from `qr-c`'s namespace may fail.
+
+If you hit this, the simplest fix is to **collapse `fake-serial` into the `qr-c` container** (run socat as a sidecar in the same namespace). Comment out the `fake-serial` service in compose and add to `qr-c/Dockerfile`:
+
+```dockerfile
+RUN apk add --no-cache socat
+```
+
+then prepend the startup with:
+
+```yaml
+qr-c:
+  command: sh -c "socat -d -d pty,raw,echo=0,link=/tmp/ttyS1,mode=666 pty,raw,echo=0,link=/tmp/ttyS2,mode=666 & sleep 1 && ./qr-c"
+```
+
+Test injection then happens via `docker exec`:
+```bash
+docker exec <qr-c-container> sh -c 'echo ABC123 > /tmp/ttyS2'
+```
 
 ## Test
 

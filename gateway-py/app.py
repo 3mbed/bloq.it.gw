@@ -123,8 +123,11 @@ def on_message(client, userdata, msg):
 def _make_tls_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     if os.path.isfile(MQTT_CERT):
-        ctx.load_verify_locations(cafile=MQTT_CERT)
-        log.info("TLS: using CA cert %s", MQTT_CERT)
+        try:
+            ctx.load_verify_locations(cafile=MQTT_CERT)
+            log.info("TLS: using CA cert %s", MQTT_CERT)
+        except ssl.SSLError as exc:
+            log.warning("TLS: cert at %s unusable (%s) — using system CAs", MQTT_CERT, exc)
     else:
         log.warning("TLS: cert file not found (%s) — using system CAs", MQTT_CERT)
     return ctx

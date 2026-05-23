@@ -5,11 +5,16 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download mosquitto.org public CA cert (TLS peer verification)
-RUN apt-get update -qq && apt-get install -y --no-install-recommends wget ca-certificates \
-    && wget -q https://test.mosquitto.org/ssl/mosquitto.org.crt -O /certs/mosquitto.org.crt 2>/dev/null \
-    || (mkdir -p /certs && echo "# placeholder — mount real cert or rely on system CAs" > /certs/mosquitto.org.crt) \
-    && apt-get purge -y wget && rm -rf /var/lib/apt/lists/*
+# Download mosquitto.org public CA cert (TLS peer verification).
+# If the download fails (no internet at build time), drop a placeholder
+# and fall back to the system CA bundle at runtime (handled in app.py).
+RUN apt-get update -qq \
+    && apt-get install -y --no-install-recommends wget ca-certificates \
+    && mkdir -p /certs \
+    && (wget -q https://test.mosquitto.org/ssl/mosquitto.org.crt -O /certs/mosquitto.org.crt \
+        || echo "# placeholder — using system CAs at runtime" > /certs/mosquitto.org.crt) \
+    && apt-get purge -y wget \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY app.py .
 

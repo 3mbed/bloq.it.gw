@@ -9,10 +9,12 @@ services:
   fake-serial:
     image: alpine/socat:latest
     restart: unless-stopped
-    command: >
-      socat -d -d
-      pty,raw,echo=0,link=/tmp/ttyS1
-      pty,raw,echo=0,link=/tmp/ttyS2
+    # alpine/socat's ENTRYPOINT is already "socat" — pass only the args.
+    command:
+      - "-d"
+      - "-d"
+      - "pty,raw,echo=0,link=/tmp/ttyS1,mode=666"
+      - "pty,raw,echo=0,link=/tmp/ttyS2,mode=666"
     volumes:
       - /tmp:/tmp
     healthcheck:
