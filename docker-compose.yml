@@ -41,7 +41,7 @@ services:
       SERIAL_PORT: /tmp/ttyS1
       BAUD_RATE: "115200"
       SOCK_PATH: /tmp/qr.sock
-      READ_TIMEOUT: "10"
+      READ_TIMEOUT: "30"
     volumes:
       - /tmp:/tmp
       - logs:/var/log/bloqit

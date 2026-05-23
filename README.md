@@ -71,15 +71,14 @@ You should see the gateway's `gateway_online` event followed by the PING respons
 
 `/tmp/ttyS2` is the other end of the socat pair.  Writing to it simulates the physical QR scanner emitting a barcode string.
 
-```bash
-# First, trigger a START (so qr-c is waiting on the serial port)
-mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}'
+Chain the START and the inject so the scan arrives before `READ_TIMEOUT`
+expires (default 30 s — see env table below). Run from the repo root so
+`docker compose ps` can resolve the container; otherwise the command
+substitution is empty and docker exec errors with `No such container: sh`.
 
-# Then inject a fake scan (within READ_TIMEOUT seconds).
-# Run from the repo root so `docker compose ps` can find docker-compose.yml;
-# otherwise the command substitution is empty and docker exec errors with
-# "No such container: sh".
-docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
+```bash
+mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}' \
+  && docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
 
 # Alternative if you're not in the repo root — look up the container name:
 # docker exec $(docker ps --filter name=qr-c --format '{{.Names}}') \
@@ -116,7 +115,7 @@ docker compose logs -f
 | `SERIAL_PORT`  | `/dev/ttyS1`   | Path to the serial device               |
 | `BAUD_RATE`    | `115200`       | UART baud rate                          |
 | `SOCK_PATH`    | `/tmp/qr.sock` | Unix socket path exposed to Container B |
-| `READ_TIMEOUT` | `10`           | Seconds to wait for a QR scan (START)   |
+| `READ_TIMEOUT` | `30`           | Seconds to wait for a QR scan (START)   |
 
 ### gateway-py (Container B)
 
