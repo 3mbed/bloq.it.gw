@@ -75,8 +75,15 @@ You should see the gateway's `gateway_online` event followed by the PING respons
 # First, trigger a START (so qr-c is waiting on the serial port)
 mosquitto_pub -h localhost -p 11883 -t from_cloud/command -m '{"command":"START"}'
 
-# Then inject a fake scan (within READ_TIMEOUT seconds)
+# Then inject a fake scan (within READ_TIMEOUT seconds).
+# Run from the repo root so `docker compose ps` can find docker-compose.yml;
+# otherwise the command substitution is empty and docker exec errors with
+# "No such container: sh".
 docker exec $(docker compose ps -q qr-c) sh -c 'echo ABC123 > /tmp/ttyS2'
+
+# Alternative if you're not in the repo root — look up the container name:
+# docker exec $(docker ps --filter name=qr-c --format '{{.Names}}') \
+#   sh -c 'echo ABC123 > /tmp/ttyS2'
 ```
 
 Expected event on `from_device/events`:
